@@ -4,262 +4,223 @@ import me.index.Holder;
 
 import java.util.List;
 
-import static java.lang.System.arraycopy;
-
 public class BTree implements Storage {
     public static final int t = 32;
     public static final int maxKeys = 2 * t - 1;
 
-    public static int lowerBound(long[] a, int n, long key) {
+    int verify = 0;
+
+    private void verify(Node node){
+        verify++;
+        for(int i = 1;i < node.n;i++){
+            if(node.keys[i] <= node.keys[i - 1]){
+                System.out.printf("!!!!!!! verify %d\n", verify);
+                return;
+            }
+        }
+        System.out.printf("+ verify %d\n", verify);
+    }
+
+    private static int lowerBound(long[] a, int n, long key) {
         int i;
         for (i = 0; i < n; i++)
             if (a[i] >= key) return i;
         return i;
     }
 
-    public static final class Node {
-        int n;
-        final boolean leaf;
-        final long[] keys;
-        final Object[] vals;
-        final Node[] child;
-
-        Node(boolean leaf) {
-            this.leaf = leaf;
-            this.keys = new long[2 * t - 1];
-            this.vals = new Object[2 * t - 1];
-            this.child = new Node[2 * t];
-        }
-
-        void resort(List<Long> k, List<Object> v) {
-            if (leaf) {
-                for (int i = 0; i < n; i++) {
-                    k.add(keys[i]);
-                    v.add(vals[i]);
-                }
-            } else {
-                for (int i = 0; i < n; i++) {
-                    child[i].resort(k, v);
-                    k.add(keys[i]);
-                    v.add(vals[i]);
-                }
-                child[n].resort(k, v);
-            }
-        }
+    private static void insertLong(long[] a, int idx, long key){
+        System.arraycopy(a, idx, a, idx + 1, a.length - idx - 1);
+        a[idx] = key;
     }
 
-    private Node root;
-    private int size;
-
-    public BTree() {
-        this.root = new Node(true);
-        this.size = 0;
+    private static <T> void insert(T[] a, int idx, T value){
+        System.arraycopy(a, idx, a, idx + 1, a.length - idx - 1);
+        a[idx] = value;
     }
+
+    private static void eraseLong(long[] a, int idx){
+        System.arraycopy(a, idx + 1, a, idx, a.length - idx - 1);
+    }
+
+    private static <T> void erase(T[] a, int idx){
+        System.arraycopy(a, idx + 1, a, idx, a.length - idx - 1);
+    }
+
+    private static Node take(Node node, int from, int to){
+        Node out = new Node(node.leaf);
+        out.n = to - from;
+        System.arraycopy(node.keys, from, out.keys, 0, (to - from));
+        System.arraycopy(node.vals, from, out.vals, 0, (to - from));
+        System.arraycopy(node.childs, from, out.childs, 0, (to - from) + 1);
+        return out;
+    }
+
+    private static Node leftHalf(Node node){
+        return take(node, 0, t - 1);
+    }
+    private static Node rightHalf(Node node){
+        return take(node, t, maxKeys);
+    }
+
+    private static Node mergeFillMiddle(Node lhs, Node rhs, long fillKey, Object fillVal){
+        System.arraycopy(rhs.keys, 0, lhs.keys, lhs.n + 1, rhs.n);
+        System.arraycopy(rhs.vals, 0, lhs.vals, lhs.n + 1, rhs.n);
+        System.arraycopy(rhs.childs, 0, lhs.childs, lhs.n + 1, rhs.n + 1);
+        lhs.keys[lhs.n] = fillKey;
+        lhs.vals[lhs.n] = fillVal;
+        lhs.n += rhs.n + 1;
+        return lhs;
+    }
+
 
     @Override
     public void init(List<Long> keys, List<Object> values, int maxErr) {
-        for (int i = 0; i < keys.size(); i++)
-            this.insert(keys.get(i), values.get(i));
+        size = 0;
+        root = new Node(true);
+        for(int i = 0;i < keys.size();i++){
+            insert(keys.get(i), values.get(i));
+        }
     }
 
     @Override
     public int find(long key, Holder<Object> result) {
-        Node x = root;
+        Node current = root;
         while (true) {
-            int i = lowerBound(x.keys, x.n, key);
-            if (i < x.n && x.keys[i] == key) {
-                result.v = x.vals[i];
+            int lb = lowerBound(current.keys, current.n, key);
+            if (current.has(key, lb)) {
+                result.v = current.vals[lb];
                 return OK;
-            }
-            if (x.leaf) {
+            } else if (current.leaf) {
                 return FAIL;
+            } else {
+                current = current.childs[lb];
             }
-            x = x.child[i];
         }
     }
 
     @Override
     public int insert(long key, Object value) {
-        if (root.n == maxKeys) {
-            Node x = new Node(root.leaf);
-            arraycopy(root.keys, t, x.keys, 0, t - 1);
-            arraycopy(root.vals, t, x.vals, 0, t - 1);
-            if (!root.leaf) arraycopy(root.child, t, x.child, 0, t);
-            x.n = t - 1;
-            root.n = t - 1;
-            Node r = new Node(false);
-            r.child[0] = root;
-            r.child[1] = x;
-            r.keys[0] = root.keys[t - 1];
-            r.vals[0] = root.vals[t - 1];
-            r.n++;
-            root = r;
-        }
-        Node x = root;
-        while (true) {
-            int i = lowerBound(x.keys, x.n, key);
-            if (i < x.n && x.keys[i] == key) return FAIL;
-            if (x.leaf) {
-                if (x.n - i > 0) {
-                    arraycopy(x.keys, i, x.keys, i + 1, x.n - i);
-                    arraycopy(x.vals, i, x.vals, i + 1, x.n - i);
+        Node current = root;
+        Node prev = root;
+        int lb = 0;
+        while(true){
+            if(current.n == maxKeys){
+                if(current == prev){
+                    root = new Node(false);
+                    prev = root;
                 }
-                x.keys[i] = key;
-                x.vals[i] = value;
-                x.n++;
-                size++;
+                prev.n++;
+                insertLong(prev.keys, lb, current.keys[t - 1]);
+                insert(prev.vals, lb, current.keys[t - 1]);
+                prev.childs[lb] = rightHalf(current);
+                insert(prev.childs, lb, leftHalf(current));
+                current = prev;
+            }
+            lb = lowerBound(current.keys, current.n, key);
+            if(current.has(key, lb)){
+                current.vals[lb] = value;
                 return OK;
             }
-            Node c = x.child[i];
-            if (c.n == maxKeys) {
-                Node y = x.child[i];
-                Node z = new Node(y.leaf);
-                arraycopy(y.keys, t, z.keys, 0, t - 1);
-                arraycopy(y.vals, t, z.vals, 0, t - 1);
-                if (!y.leaf) arraycopy(y.child, t, z.child, 0, t);
-                z.n = t - 1;
-                y.n = t - 1;
-                arraycopy(x.child, i + 1, x.child, i + 2, x.n - i);
-                arraycopy(x.keys, i, x.keys, i + 1, x.n - i);
-                arraycopy(x.vals, i, x.vals, i + 1, x.n - i);
-                x.child[i + 1] = z;
-                x.keys[i] = y.keys[t - 1];
-                x.vals[i] = y.vals[t - 1];
-                x.n++;
-                if (x.keys[i] == key) return FAIL;
-                if (key > x.keys[i]) i++;
+            if(current.leaf){
+                insertLong(current.keys, lb, key);
+                insert(current.vals, lb, value);
+                current.n++;
+                size++;
+                return OK;
+            }else{
+                prev = current;
+                current = prev.childs[lb];
             }
-            x = x.child[i];
+            //verify(prev);
+            //verify(current);
         }
     }
 
+
     @Override
     public int remove(long key) {
-        Node x = root;
-        long k = key;
-        while (true) {
-            int i = lowerBound(x.keys, x.n, k);
-            if (i < x.n && x.keys[i] == k) {
-                if (x.leaf) {
-                    if ((x.n - i - 1) > 0) {
-                        arraycopy(x.keys, i + 1, x.keys, i, x.n - i - 1);
-                        arraycopy(x.vals, i + 1, x.vals, i, x.n - i - 1);
+        Node intermid = null;
+
+        Node current = root;
+        Node prev = root;
+        int lb = 0;
+        while(true){
+            if(current != root && current.n == t - 1){
+                if(lb != 0 && prev.childs[lb - 1].n >= t){
+                    //System.out.println("small right rotation");
+                    // small right rotation
+                    Node donor = prev.childs[lb - 1];
+                    insertLong(current.keys, 0, prev.keys[lb - 1]);
+                    insert(current.vals, 0, prev.vals[lb - 1]);
+                    insert(current.childs, 0, donor.childs[donor.n]);
+                    donor.n--;
+                    current.n++;
+                    // donor n is already decreased, so no need for -1:
+                    prev.keys[lb - 1] = donor.keys[donor.n];
+                    prev.vals[lb - 1] = donor.vals[donor.n];
+                }else if(lb != prev.n && prev.childs[lb + 1].n >= t){
+                    //System.out.println("// small left rotation");
+                    Node donor = prev.childs[lb + 1];
+                    current.keys[current.n] = prev.keys[lb];
+                    current.vals[current.n] = prev.vals[lb];
+                    current.childs[current.n + 1] = donor.childs[0];
+                    prev.keys[lb] = donor.keys[0];
+                    prev.vals[lb] = donor.vals[0];
+
+                    eraseLong(donor.keys, 0);
+                    erase(donor.vals, 0);
+                    erase(donor.childs, 0);
+                    donor.n--;
+                    current.n++;
+                }else {
+                    if(lb != 0) {
+                        //System.out.println("// merge left");
+                        current = prev.childs[lb - 1]
+                                = mergeFillMiddle(prev.childs[lb - 1], current, prev.keys[lb - 1], prev.vals[lb - 1]);
+                        eraseLong(prev.keys, lb - 1);
+                        erase(prev.vals, lb - 1);
+                        erase(prev.childs, lb);
+                    }else if(lb != prev.n) {
+                        //System.out.println("// merge right");
+                        mergeFillMiddle(current, prev.childs[lb + 1], prev.keys[lb], prev.vals[lb]);
+                        eraseLong(prev.keys, lb);
+                        erase(prev.vals, lb);
+                        erase(prev.childs, lb + 1);
                     }
-                    x.n--;
-                    x.vals[x.n] = null;
-                    if (root.n == 0 && !root.leaf) root = root.child[0];
+                    prev.n--;
+                    if (prev == root && root.n == 0) {
+                        root = current;
+                    }
+                }
+
+            }
+            lb = lowerBound(current.keys, current.n, key);
+            if(current.leaf){
+                if(current.has(key, lb)) {
+                    eraseLong(current.keys, lb);
+                    erase(current.vals, lb);
+                    current.n--;
                     size--;
                     return OK;
-                } else {
-                    long q = x.keys[i];
-                    Node l = x.child[i];
-                    Node r = x.child[i + 1];
-                    if (l.n >= t) {
-                        Node c = l;
-                        while (!c.leaf) c = c.child[c.n];
-                        x.keys[i] = c.keys[c.n - 1];
-                        x.vals[i] = c.vals[c.n - 1];
-                        x = l;
-                        k = c.keys[c.n - 1];
-                    } else if (r.n >= t) {
-                        Node c = r;
-                        while (!c.leaf) c = c.child[0];
-                        x.keys[i] = c.keys[0];
-                        x.vals[i] = c.vals[0];
-                        x = r;
-                        k = c.keys[0];
-                    } else {
-                        Node u = x.child[i];
-                        Node w = x.child[i + 1];
-                        u.keys[t - 1] = x.keys[i];
-                        u.vals[t - 1] = x.vals[i];
-                        arraycopy(w.keys, 0, u.keys, t, w.n);
-                        arraycopy(w.vals, 0, u.vals, t, w.n);
-                        if (!u.leaf) arraycopy(w.child, 0, u.child, t, w.n + 1);
-                        u.n += w.n + 1;
-                        arraycopy(x.keys, i + 1, x.keys, i, x.n - i - 1);
-                        arraycopy(x.vals, i + 1, x.vals, i, x.n - i - 1);
-                        x.vals[x.n - 1] = null;
-                        arraycopy(x.child, i + 2, x.child, i + 1, x.n - i - 1);
-                        x.child[x.n] = null;
-                        x.n--;
-                        x = l;
-                        k = q;
+                } else if(intermid != null){
+                    lb = lowerBound(intermid.keys, intermid.n, key);
+                    if(!intermid.has(key, lb)){
+                        throw new AssertionError("Lost removing key somewhere");
                     }
+                    intermid.keys[lb] = current.keys[current.n - 1];
+                    intermid.vals[lb] = current.vals[current.n - 1];
+                    current.n--;
+                    size--;
+                    return OK;
                 }
-            } else {
-                if (x.leaf) return FAIL;
-                boolean flag = (i == x.n);
-                if (x.child[i].n < t) {
-                    if (i > 0 && x.child[i - 1].n >= t) {
-                        Node u = x.child[i];
-                        Node w = x.child[i - 1];
-                        arraycopy(u.keys, 0, u.keys, 1, u.n);
-                        arraycopy(u.vals, 0, u.vals, 1, u.n);
-                        if (!u.leaf) arraycopy(u.child, 0, u.child, 1, u.n + 1);
-                        u.keys[0] = x.keys[i - 1];
-                        u.vals[0] = x.vals[i - 1];
-                        if (!u.leaf) {
-                            u.child[0] = w.child[w.n];
-                            w.child[w.n] = null;
-                        }
-                        x.keys[i - 1] = w.keys[w.n - 1];
-                        x.vals[i - 1] = w.vals[w.n - 1];
-                        w.vals[w.n - 1] = null;
-                        w.n--;
-                        u.n++;
-                    } else if (i < x.n && x.child[i + 1].n >= t) {
-                        Node u = x.child[i];
-                        Node w = x.child[i + 1];
-                        u.keys[u.n] = x.keys[i];
-                        u.vals[u.n] = x.vals[i];
-                        if (!u.leaf) {
-                            u.child[u.n + 1] = w.child[0];
-                            arraycopy(w.child, 1, w.child, 0, w.n);
-                            w.child[w.n] = null;
-                        }
-                        x.keys[i] = w.keys[0];
-                        x.vals[i] = w.vals[0];
-                        arraycopy(w.keys, 1, w.keys, 0, w.n - 1);
-                        arraycopy(w.vals, 1, w.vals, 0, w.n - 1);
-                        w.n--;
-                        w.vals[w.n] = null;
-                        u.n++;
-                    } else {
-                        Node u;
-                        Node w;
-                        if (i < x.n) {
-                            u = x.child[i];
-                            w = x.child[i + 1];
-                            u.keys[t - 1] = x.keys[i];
-                            u.vals[t - 1] = x.vals[i];
-                            arraycopy(w.keys, 0, u.keys, t, w.n);
-                            arraycopy(w.vals, 0, u.vals, t, w.n);
-                            if (!u.leaf) arraycopy(w.child, 0, u.child, t, w.n + 1);
-                            arraycopy(x.keys, i + 1, x.keys, i, x.n - i - 1);
-                            arraycopy(x.vals, i + 1, x.vals, i, x.n - i - 1);
-                            arraycopy(x.child, i + 2, x.child, i + 1, x.n - i - 1);
-                        } else {
-                            u = x.child[i - 1];
-                            w = x.child[i];
-                            u.keys[t - 1] = x.keys[i - 1];
-                            u.vals[t - 1] = x.vals[i - 1];
-                            arraycopy(w.keys, 0, u.keys, t, w.n);
-                            arraycopy(w.vals, 0, u.vals, t, w.n);
-                            if (!u.leaf) arraycopy(w.child, 0, u.child, t, w.n + 1);
-                            arraycopy(x.keys, i, x.keys, i - 1, x.n - i);
-                            arraycopy(x.vals, i, x.vals, i - 1, x.n - i);
-                            arraycopy(x.child, i + 1, x.child, i, x.n - i);
-                        }
-                        u.n += w.n + 1;
-                        x.vals[x.n - 1] = null;
-                        x.child[x.n] = null;
-                        x.n--;
-                    }
-                }
-                if (flag && i > x.n) i--;
-                x = x.child[i];
+                return FAIL;
             }
+            if(current.has(key, lb)) {
+                intermid = current;
+            }
+
+            prev = current;
+            current = prev.childs[lb];
         }
     }
 
@@ -272,4 +233,48 @@ public class BTree implements Storage {
     public int size() {
         return size;
     }
+
+    private static final class Node {
+        int n;
+        final boolean leaf;
+        final long[] keys;
+        final Object[] vals;
+        final Node[] childs;
+
+        Node(boolean leaf) {
+            this.leaf = leaf;
+            this.keys = new long[2 * t - 1];
+            this.vals = new Object[2 * t - 1];
+            this.childs = new Node[2 * t];
+        }
+
+        private void resort(List<Long> keys, List<Object> vals) {
+            if(leaf){
+                for(int i = 0;i < n;i++){
+                    keys.add(this.keys[i]);
+                    vals.add(this.vals[i]);
+                }
+            }else{
+                for(int i = 0;i < n;i++){
+                    this.childs[i].resort(keys, vals);
+                    keys.add(this.keys[i]);
+                    vals.add(this.vals[i]);
+                }
+                this.childs[n].resort(keys, vals);
+            }
+        }
+
+        private boolean has(long key, int pos){
+            return (pos >= 0 && pos < n && keys[pos] == key);
+        }
+
+    }
+
+    private Node root;
+    private int size;
+
+    public BTree() {
+        this.root = new Node(true);
+    }
+
 }
