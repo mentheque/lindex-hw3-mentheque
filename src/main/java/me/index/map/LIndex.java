@@ -37,7 +37,7 @@ public class LIndex implements Storage {
 
     private int size = 0;
     private Models models = new Models(List.of(Long.MIN_VALUE), List.of(Long.MAX_VALUE),
-            List.of(new Model(List.of(), List.of(new StorageHandler()), new LRM(0, 0, 16), 16)));
+            List.of(new Model(List.of(), List.of(new Bin()), new LRM(0, 0, 16), 16)));
 
     @Override
     public void init(List<Long> keys, List<Object> values, int maxErr) {
@@ -50,10 +50,10 @@ public class LIndex implements Storage {
             max_keys.add((end < keys.size() ? (keys.get(end) - 1) : Long.MAX_VALUE));
             models.add(new Model(keys.subList(start, end),
                     IntStream.range(start, end)
-                    .mapToObj(i -> new StorageHandler(keys.get(i), values.get(i)))
+                    .mapToObj(i -> new Single(keys.get(i), values.get(i)))
                     .collect(Collectors.toList()),
                     lrm, maxErr));
-            models.getLast().bins.add(new StorageHandler());
+            models.getLast().bins.add(new Bin());
         };
 
         Regression regression = new Regression();
@@ -64,7 +64,7 @@ public class LIndex implements Storage {
             min_keys.add(Long.MIN_VALUE);
             max_keys.add(Long.MAX_VALUE);
             models.add(new Model(new ArrayList<>(), new ArrayList<>(), new LRM(0, 0, maxErr), maxErr));
-            models.getLast().bins.add(new StorageHandler());
+            models.getLast().bins.add(new Bin());
         }
         this.models = new Models(min_keys, max_keys, models);
         size = keys.size();
@@ -76,7 +76,11 @@ public class LIndex implements Storage {
         return models.models.get(modelIdx);
     }
 
-    private StorageHandler getStorageHandlerM(Model model, long key){
+    private Storage getStorageM(Model model, long key){
+        return model.bins().get(getBinIdxM(model, key));
+    }
+
+    private int getBinIdxM(Model model, long key){
         if(!model.keys.isEmpty()) { // Possible when initialising with 0 data
             int pred = Regression.predict(model.lrm.k(), model.lrm.b(), key);
             pred = Math.min(pred, model.keys.size() - 1);
@@ -91,34 +95,52 @@ public class LIndex implements Storage {
             }
             for (; l <= r; l++) {
                 if (model.keys.get(l) >= key) {
-                    return model.bins.get(l);
+                    return l;
                 }
             }
         }
         // If we are here, but no bin has key bigger than searched, give surplus bin.
-        return model.bins().getLast();
+        return model.bins().size() - 1;
     }
 
-    private StorageHandler getStorageHandler(long key){
-        return getStorageHandlerM(getModel(key), key);
+    private Storage getStorage(long key){
+        return getStorageM(getModel(key), key);
     }
 
 
     @Override
     public int find(long key, Holder<Object> result) {
-        return getStorageHandler(key).find(key, result);
+        return getStorage(key).find(key, result);
     }
 
     @Override
     public int insert(long key, Object value) {
-        int verdict = getStorageHandler(key).insert(key, value);
+        Model model = getModel(key);
+        int binIdx = getBinIdxM(model, key);
+        Storage storage = model.bins.get(binIdx);
+        int verdict = storage.insert(key, value);
+        if(verdict == REBUILD){
+            Storage newStorage;
+            if(storage.size() <= 1){
+                newStorage = new Bin();
+            }else{
+                newStorage = new LIndex();
+            }
+            List<Long> keys = new ArrayList<>();
+            List<Object> vals = new ArrayList<>();
+            storage.resort(keys, vals);
+            newStorage.init(keys, vals, models.models.getFirst().maxErr);
+
+            model.bins.set(binIdx, newStorage);
+            verdict = newStorage.insert(key, value);
+        }
         if(verdict == OK) size++;
         return verdict;
     }
 
     @Override
     public int remove(long key) {
-        int verdict = getStorageHandler(key).remove(key);
+        int verdict = getStorage(key).remove(key);
         if(verdict == OK) size--;
         return verdict;
     }
@@ -142,89 +164,18 @@ public class LIndex implements Storage {
     private record Models(List<Long> min_keys, List<Long> max_keys, List<Model> models) {
     }
 
-    private record Model(List<Long> keys, List<StorageHandler> bins, LRM lrm, int maxErr) {
+    private record Model(List<Long> keys, List<Storage> bins, LRM lrm, int maxErr) {
     }
 
-    private class StorageHandler implements Storage{
+    private static class Single implements Storage{
+        long key;
+        Object value;
+        boolean deleted;
 
-        public StorageHandler(){
-            state = State.Bin;
-            storage = new Bin();
-        }
-
-        public StorageHandler(long key, Object value) {
-            state = State.Single;
-            storage = new Single(key, value);
-        }
-
-        private enum State{
-            Single, Bin, Lindex
-        }
-        private State state;
-        private Storage storage;
-
-        private static class Single implements Storage{
-            long key;
-            Object value;
-            boolean deleted;
-
-            public Single(long key, Object value) {
-                this.key = key;
-                this.value = value;
-                deleted = false;
-            }
-
-            @Override
-            public void init(List<Long> keys, List<Object> values, int maxErr) {
-                throw new UnsupportedOperationException();
-            }
-
-            @Override
-            public int find(long key, Holder<Object> result) {
-                if(this.key == key && !deleted){
-                    result.v = value;
-                    return OK;
-                }
-                return FAIL;
-            }
-
-            @Override
-            public int insert(long key, Object value) {
-                if(this.key == key){
-                    if(deleted){
-                        deleted = false;
-                        this.value = value;
-                        return OK;
-                    }
-                    return FAIL;
-                }
-                return REBUILD;
-            }
-
-            @Override
-            public int remove(long key) {
-                if(this.key == key){
-                    if(deleted){
-                        return FAIL;
-                    }
-                    deleted = true;
-                    return OK;
-                }
-                return FAIL;
-            }
-
-            @Override
-            public void resort(List<Long> keys, List<Object> vals) {
-                if(!deleted){
-                    keys.add(key);
-                    vals.add(value);
-                }
-            }
-
-            @Override
-            public int size() {
-                return (deleted? 0 : 1);
-            }
+        public Single(long key, Object value) {
+            this.key = key;
+            this.value = value;
+            deleted = false;
         }
 
         @Override
@@ -234,44 +185,49 @@ public class LIndex implements Storage {
 
         @Override
         public int find(long key, Holder<Object> result) {
-            return storage.find(key, result);
+            if(this.key == key && !deleted){
+                result.v = value;
+                return OK;
+            }
+            return FAIL;
         }
 
         @Override
         public int insert(long key, Object value) {
-            int verdict = storage.insert(key, value);
-            if(verdict == REBUILD){
-                Storage newStorage;
-                if(state == State.Single){
-                    state = State.Bin;
-                    newStorage = new Bin();
-                }else{
-                    state = State.Lindex;
-                    newStorage = new LIndex();
+            if(this.key == key){
+                if(deleted){
+                    deleted = false;
+                    this.value = value;
+                    return OK;
                 }
-                List<Long> keys = new ArrayList<>();
-                List<Object> vals = new ArrayList<>();
-                storage.resort(keys, vals);
-                newStorage.init(keys, vals, models.models.getFirst().maxErr);
-                storage = newStorage;
-                return storage.insert(key, value);
+                return FAIL;
             }
-            return verdict;
+            return REBUILD;
         }
 
         @Override
         public int remove(long key) {
-            return storage.remove(key);
+            if(this.key == key){
+                if(deleted){
+                    return FAIL;
+                }
+                deleted = true;
+                return OK;
+            }
+            return FAIL;
         }
 
         @Override
         public void resort(List<Long> keys, List<Object> vals) {
-            storage.resort(keys, vals);
+            if(!deleted){
+                keys.add(key);
+                vals.add(value);
+            }
         }
 
         @Override
         public int size() {
-            return storage.size();
+            return (deleted? 0 : 1);
         }
     }
 
