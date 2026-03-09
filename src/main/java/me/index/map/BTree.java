@@ -8,19 +8,6 @@ public class BTree implements Storage {
     public static final int t = 32;
     public static final int maxKeys = 2 * t - 1;
 
-    int verify = 0;
-
-    private void verify(Node node){
-        verify++;
-        for(int i = 1;i < node.n;i++){
-            if(node.keys[i] <= node.keys[i - 1]){
-                System.out.printf("!!!!!!! verify %d\n", verify);
-                return;
-            }
-        }
-        System.out.printf("+ verify %d\n", verify);
-    }
-
     private static int lowerBound(long[] a, int n, long key) {
         int i;
         for (i = 0; i < n; i++)
@@ -119,7 +106,7 @@ public class BTree implements Storage {
             lb = lowerBound(current.keys, current.n, key);
             if(current.has(key, lb)){
                 current.vals[lb] = value;
-                return OK;
+                return FAIL;
             }
             if(current.leaf){
                 insertLong(current.keys, lb, key);
@@ -131,8 +118,6 @@ public class BTree implements Storage {
                 prev = current;
                 current = prev.childs[lb];
             }
-            //verify(prev);
-            //verify(current);
         }
     }
 
@@ -147,8 +132,7 @@ public class BTree implements Storage {
         while(true){
             if(current != root && current.n == t - 1){
                 if(lb != 0 && prev.childs[lb - 1].n >= t){
-                    //System.out.println("small right rotation");
-                    // small right rotation
+                    //small right rotation
                     Node donor = prev.childs[lb - 1];
                     insertLong(current.keys, 0, prev.keys[lb - 1]);
                     insert(current.vals, 0, prev.vals[lb - 1]);
@@ -159,7 +143,7 @@ public class BTree implements Storage {
                     prev.keys[lb - 1] = donor.keys[donor.n];
                     prev.vals[lb - 1] = donor.vals[donor.n];
                 }else if(lb != prev.n && prev.childs[lb + 1].n >= t){
-                    //System.out.println("// small left rotation");
+                    // small left rotation
                     Node donor = prev.childs[lb + 1];
                     current.keys[current.n] = prev.keys[lb];
                     current.vals[current.n] = prev.vals[lb];
@@ -174,14 +158,14 @@ public class BTree implements Storage {
                     current.n++;
                 }else {
                     if(lb != 0) {
-                        //System.out.println("// merge left");
+                        // merge left
                         current = prev.childs[lb - 1]
                                 = mergeFillMiddle(prev.childs[lb - 1], current, prev.keys[lb - 1], prev.vals[lb - 1]);
                         eraseLong(prev.keys, lb - 1);
                         erase(prev.vals, lb - 1);
                         erase(prev.childs, lb);
                     }else if(lb != prev.n) {
-                        //System.out.println("// merge right");
+                        // merge right
                         mergeFillMiddle(current, prev.childs[lb + 1], prev.keys[lb], prev.vals[lb]);
                         eraseLong(prev.keys, lb);
                         erase(prev.vals, lb);
