@@ -7,7 +7,7 @@ import java.util.*;
 public class BTreeAdapt implements Storage {
     public static final int t = 32;
     public static final int maxKeys = 2 * t - 1;
-    public static float d0 = 0.5f;
+    public static double d0 = 2.0d;
 
     private static int lowerBound(long[] a, int n, long key) {
         int i;
